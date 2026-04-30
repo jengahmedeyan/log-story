@@ -1,0 +1,88 @@
+{
+  "name": "log-story",
+  "version": "0.1.0",
+  "description": "Transform raw logs into human-readable narratives, structured timelines, and actionable insights",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "log-story": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./integrations/winston": {
+      "types": "./dist/integrations/winston.d.ts",
+      "import": "./dist/integrations/winston.mjs",
+      "require": "./dist/integrations/winston.js"
+    },
+    "./integrations/pino": {
+      "types": "./dist/integrations/pino.d.ts",
+      "import": "./dist/integrations/pino.mjs",
+      "require": "./dist/integrations/pino.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "logs",
+    "logging",
+    "narrative",
+    "ai",
+    "debugging",
+    "observability",
+    "winston",
+    "pino",
+    "log-analysis",
+    "developer-tools"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "ora": "^8.0.1"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@google/generative-ai": "^0.21.0",
+    "openai": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@google/generative-ai": "^0.24.1",
+    "@types/node": "^20.19.39",
+    "eslint": "^9.5.0",
+    "openai": "^4.52.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0"
+  }
+}
