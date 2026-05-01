@@ -21,7 +21,7 @@ export function detectFormat(lines: string[]): LogFormat {
         if ('level' in obj && 'message' in obj) {
           return 'winston-json';
         }
-        return 'winston-json'; // Generic JSON log
+        return 'unknown'; // Unrecognized JSON structure
       } catch {
         // Not JSON
       }
@@ -38,9 +38,11 @@ export function parseWinstonJSON(line: string): LogEntry | null {
   try {
     const obj = JSON.parse(line);
     const { level, message, timestamp, ...rest } = obj;
+    const ts = normalizeTimestamp(timestamp);
 
     return normalizeEntry({
-      timestamp: normalizeTimestamp(timestamp),
+      timestamp: ts.date,
+      timestampInferred: ts.inferred,
       level: normalizeLevel(level),
       message: message ?? '',
       metadata: rest,
@@ -63,9 +65,11 @@ export function parsePinoJSON(line: string): LogEntry | null {
   try {
     const obj = JSON.parse(line);
     const { level, msg, time, timestamp, ...rest } = obj;
+    const ts = normalizeTimestamp(time ?? timestamp);
 
     return normalizeEntry({
-      timestamp: normalizeTimestamp(time ?? timestamp),
+      timestamp: ts.date,
+      timestampInferred: ts.inferred,
       level: normalizeLevel(level),
       message: msg ?? '',
       metadata: rest,
@@ -95,8 +99,10 @@ export function parsePlainText(line: string): LogEntry | null {
     /^\[([^\]]+)\]\s*(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL)[:\s]+(.+)/i
   );
   if (bracketMatch) {
+    const ts = normalizeTimestamp(bracketMatch[1]);
     return normalizeEntry({
-      timestamp: normalizeTimestamp(bracketMatch[1]),
+      timestamp: ts.date,
+      timestampInferred: ts.inferred,
       level: normalizeLevel(bracketMatch[2]),
       message: bracketMatch[3].trim(),
       metadata: {},
@@ -114,8 +120,10 @@ export function parsePlainText(line: string): LogEntry | null {
     const requestId = metadata['id'] ?? metadata['request_id'] ?? metadata['requestId'] ?? metadata['reqId'];
     const userId = metadata['user'] ?? metadata['userId'] ?? metadata['user_id'] ?? metadata['uid'];
 
+    const ts = normalizeTimestamp(spaceMatch[1]);
     return normalizeEntry({
-      timestamp: normalizeTimestamp(spaceMatch[1]),
+      timestamp: ts.date,
+      timestampInferred: ts.inferred,
       level: normalizeLevel(spaceMatch[2]),
       message,
       metadata,
@@ -128,6 +136,7 @@ export function parsePlainText(line: string): LogEntry | null {
   // Fallback: treat entire line as message
   return normalizeEntry({
     timestamp: new Date(),
+    timestampInferred: true,
     level: inferLevelFromMessage(line),
     message: line.trim(),
     metadata: {},
