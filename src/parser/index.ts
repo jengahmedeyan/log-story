@@ -1,5 +1,6 @@
 import type { LogEntry, LogFormat, ParseResult } from '../types/index.js';
 import { detectFormat, parseWinstonJSON, parsePinoJSON, parsePlainText } from './formats.js';
+import { normalizeEntry, normalizeLevel, normalizeTimestamp } from './normalizer.js';
 
 export type ParserFn = (line: string) => LogEntry | null;
 
@@ -32,7 +33,7 @@ export function parse(input: string, format?: LogFormat): ParseResult {
   const lines = input.split('\n').filter((l) => l.trim().length > 0);
 
   if (lines.length === 0) {
-    return { entries: [], detectedFormat: 'unknown', parseErrors: 0 };
+    return { entries: [], detectedFormat: 'unknown', parseErrors: 0, inferredTimestamps: 0 };
   }
 
   const detectedFormat = format ?? detectFormat(lines);
@@ -50,7 +51,8 @@ export function parse(input: string, format?: LogFormat): ParseResult {
     }
   }
 
-  return { entries, detectedFormat, parseErrors };
+  const inferredTimestamps = entries.filter(e => e.timestampInferred).length;
+  return { entries, detectedFormat, parseErrors, inferredTimestamps };
 }
 
 /**
@@ -59,18 +61,51 @@ export function parse(input: string, format?: LogFormat): ParseResult {
 export function parseJSON(logs: Record<string, unknown>[]): ParseResult {
   const entries: LogEntry[] = [];
   let parseErrors = 0;
+  let detectedFormat: LogFormat = 'unknown';
 
   for (const log of logs) {
-    const line = JSON.stringify(log);
-    const entry = parseWinstonJSON(line) ?? parsePinoJSON(line);
+    const entry = parseObjectDirect(log);
     if (entry) {
+      if (detectedFormat === 'unknown') {
+        detectedFormat = ('msg' in log && ('time' in log || 'timestamp' in log)) ? 'pino-json' : 'winston-json';
+      }
       entries.push(entry);
     } else {
       parseErrors++;
     }
   }
 
-  return { entries, detectedFormat: 'winston-json', parseErrors };
+  const inferredTimestamps = entries.filter(e => e.timestampInferred).length;
+  return { entries, detectedFormat, parseErrors, inferredTimestamps };
+}
+
+/**
+ * Parse a JSON object directly without re-serializing.
+ */
+function parseObjectDirect(obj: Record<string, unknown>): LogEntry | null {
+  try {
+    const { level, message, msg, timestamp, time, ...rest } = obj as any;
+    const resolvedMessage = message ?? msg ?? '';
+    const resolvedTimestamp = timestamp ?? time;
+    const raw = JSON.stringify(obj);
+
+    const ts = normalizeTimestamp(resolvedTimestamp);
+    return normalizeEntry({
+      timestamp: ts.date,
+      timestampInferred: ts.inferred,
+      level: normalizeLevel(level),
+      message: resolvedMessage,
+      metadata: rest,
+      requestId: rest.requestId ?? rest.request_id ?? rest.reqId ?? rest.req?.id,
+      userId: rest.userId ?? rest.user_id ?? rest.uid
+        ?? (rest.user as any)?.id ?? (rest.user as any)?.userId,
+      sessionId: rest.sessionId ?? rest.session_id ?? rest.sessId,
+      traceId: rest.traceId ?? rest.trace_id ?? rest.spanId,
+      raw,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export { detectFormat } from './formats.js';
