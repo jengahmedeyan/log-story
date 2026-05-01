@@ -63,6 +63,19 @@ function absorbIntoGroups(
   // Use a wider window for absorption (6x the base time window)
   const absorptionWindow = Math.max(timeWindow * 6, 60_000);
 
+  // Pre-compute group time bounds to avoid O(n*m*k) recalculation
+  const groupBounds = new Map<string, { start: number; end: number; entries: LogEntry[] }>();
+  for (const [key, groupEntries] of idGroups) {
+    let start = Infinity;
+    let end = -Infinity;
+    for (const e of groupEntries) {
+      const t = e.timestamp.getTime();
+      if (t < start) start = t;
+      if (t > end) end = t;
+    }
+    groupBounds.set(key, { start, end, entries: groupEntries });
+  }
+
   for (const entry of ungrouped) {
     let absorbed = false;
     const entryTime = entry.timestamp.getTime();
@@ -72,9 +85,7 @@ function absorbIntoGroups(
     let bestGroup: LogEntry[] | null = null;
     let bestScore = 0;
 
-    for (const [, groupEntries] of idGroups) {
-      const groupStart = Math.min(...groupEntries.map((e) => e.timestamp.getTime()));
-      const groupEnd = Math.max(...groupEntries.map((e) => e.timestamp.getTime()));
+    for (const [, { start: groupStart, end: groupEnd, entries: groupEntries }] of groupBounds) {
 
       // Entry must be within the time range of this group (± absorption window)
       if (entryTime < groupStart - absorptionWindow || entryTime > groupEnd + absorptionWindow) continue;
@@ -133,6 +144,14 @@ function absorbIntoGroups(
     // Absorb if score is high enough
     if (bestGroup && bestScore >= 5) {
       bestGroup.push(entry);
+      // Update pre-computed bounds for the group that absorbed this entry
+      for (const [key, bounds] of groupBounds) {
+        if (bounds.entries === bestGroup) {
+          if (entryTime < bounds.start) bounds.start = entryTime;
+          if (entryTime > bounds.end) bounds.end = entryTime;
+          break;
+        }
+      }
       absorbed = true;
     }
 
