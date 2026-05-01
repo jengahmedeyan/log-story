@@ -105,8 +105,9 @@ export class LogStoryTransport extends Writable {
         this.onInsight?.(insight);
       }
       this.onBatch?.(result.stats);
-    }).catch(() => {
-      // Silently ignore analysis errors to not disrupt logging
+    }).catch((err: Error) => {
+      // Log analysis errors to stderr without disrupting logging
+      process.stderr.write(`[log-story] Analysis error: ${err.message}\n`);
     });
   }
 }
