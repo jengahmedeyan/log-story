@@ -1,6 +1,8 @@
 import type { AIProvider, LogEvent, StoryUnit } from '../types/index.js';
 import { narrativePrompt, rootCausePrompt } from '../narrative/prompt-templates.js';
 
+// Default model - Update periodically as newer models become available
+// Last updated: May 2026 (gpt-4o-mini is current recommended balance of cost/performance)
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const COST_PER_1K_INPUT = 0.00015;
 const COST_PER_1K_OUTPUT = 0.0006;
@@ -19,8 +21,8 @@ export function create(apiKey: string, model?: string): AIProvider {
   const modelName = model ?? DEFAULT_MODEL;
 
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
-      const prompt = narrativePrompt(event);
+    async generateNarrative(event: LogEvent, redactionConfig): Promise<string> {
+      const prompt = narrativePrompt(event, redactionConfig);
       const response = await client.chat.completions.create({
         model: modelName,
         messages: [{ role: 'user', content: prompt }],
@@ -30,8 +32,8 @@ export function create(apiKey: string, model?: string): AIProvider {
       return response.choices[0]?.message?.content?.trim() ?? '';
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
-      const prompt = rootCausePrompt(event);
+    async generateRootCause(event: LogEvent, redactionConfig): Promise<string> {
+      const prompt = rootCausePrompt(event, redactionConfig);
       const response = await client.chat.completions.create({
         model: modelName,
         messages: [{ role: 'user', content: prompt }],
