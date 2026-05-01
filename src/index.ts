@@ -5,8 +5,10 @@ import type {
   LogEvent,
   LogEntry,
   StoryUnit,
+  FilterConfig,
 } from './types/index.js';
 import { parse, parseJSON } from './parser/index.js';
+import { redactPII } from './parser/redaction.js';
 import { groupEntries } from './grouping/index.js';
 import { extractEvents } from './extraction/index.js';
 import { buildStoryUnits } from './causality/index.js';
@@ -14,11 +16,60 @@ import { generateInsights, generateSystemSummary } from './insights/index.js';
 import { format } from './output/index.js';
 import { createAnalysisStream, type LogStoryStream } from './streaming/index.js';
 
+function applyFilter(entries: LogEntry[], filter?: FilterConfig): LogEntry[] {
+  if (!filter) return entries;
+  let result = entries;
+  if (filter.levels && filter.levels.length > 0) {
+    result = result.filter(e => filter.levels!.includes(e.level));
+  }
+  if (filter.after) {
+    const after = filter.after.getTime();
+    result = result.filter(e => e.timestamp.getTime() >= after);
+  }
+  if (filter.before) {
+    const before = filter.before.getTime();
+    result = result.filter(e => e.timestamp.getTime() <= before);
+  }
+  if (filter.userId) {
+    result = result.filter(e => e.userId === filter.userId);
+  }
+  if (filter.requestId) {
+    result = result.filter(e => e.requestId === filter.requestId || e.traceId === filter.requestId);
+  }
+  return result;
+}
+
+const DEFAULT_MAX_INPUT_SIZE = 100 * 1024 * 1024; // 100MB
+
 export class LogStory {
   private config: LogStoryConfig;
 
   constructor(config: LogStoryConfig = {}) {
     this.config = config;
+  }
+
+  private validateInputSize(input: string): void {
+    const maxSize = this.config.maxInputSize ?? DEFAULT_MAX_INPUT_SIZE;
+    const size = Buffer.byteLength(input, 'utf-8');
+    if (size > maxSize) {
+      const sizeMB = (size / (1024 * 1024)).toFixed(1);
+      const maxMB = (maxSize / (1024 * 1024)).toFixed(1);
+      throw new Error(
+        `Input size (${sizeMB}MB) exceeds maximum (${maxMB}MB). ` +
+        `Use streaming for large files, or increase maxInputSize in config.`
+      );
+    }
+  }
+
+  private applyRedaction(entries: LogEntry[]): LogEntry[] {
+    const redactionConfig = this.config.redaction;
+    if (!redactionConfig?.enabled) return entries;
+
+    return entries.map(entry => ({
+      ...entry,
+      message: redactPII(entry.message, redactionConfig),
+      raw: redactPII(entry.raw, redactionConfig),
+    }));
   }
 
   private async enhanceWithAI(storyUnits: StoryUnit[]): Promise<{ aiCallsMade: number; estimatedCost: number }> {
@@ -33,35 +84,42 @@ export class LogStory {
     try {
       const provider = await getProvider(providerName, this.config.ai.apiKey, this.config.ai.model);
       const redactionConfig = this.config.redaction;
+      const concurrency = 5;
 
-      for (const unit of storyUnits) {
-        const primaryEvent = unit.events[0];
-        if (!primaryEvent) continue;
+      // Process story units in parallel batches
+      for (let i = 0; i < storyUnits.length; i += concurrency) {
+        const batch = storyUnits.slice(i, i + concurrency);
+        const results = await Promise.allSettled(
+          batch.map(async (unit) => {
+            const primaryEvent = unit.events[0];
+            if (!primaryEvent) return;
 
-        const combinedEvent: LogEvent = {
-          ...primaryEvent,
-          entries: unit.events.flatMap((e) => e.entries),
-          actions: unit.events.flatMap((e) => e.actions),
-          startTime: unit.startTime,
-          endTime: unit.endTime,
-          duration: unit.duration,
-          outcome: unit.outcome,
-        };
+            const combinedEvent: LogEvent = {
+              ...primaryEvent,
+              entries: unit.events.flatMap((e) => e.entries),
+              actions: unit.events.flatMap((e) => e.actions),
+              startTime: unit.startTime,
+              endTime: unit.endTime,
+              duration: unit.duration,
+              outcome: unit.outcome,
+            };
 
-        try {
-          unit.narrative = await provider.generateNarrative(combinedEvent, redactionConfig);
-          aiCallsMade++;
-          estimatedCost += provider.estimateCost(500);
-
-          if (unit.outcome === 'failure' || unit.outcome === 'partial') {
-            const rootCause = await provider.generateRootCause(combinedEvent, redactionConfig);
-            if (rootCause) unit.rootCause = rootCause;
+            unit.narrative = await provider.generateNarrative(combinedEvent, redactionConfig);
             aiCallsMade++;
-            estimatedCost += provider.estimateCost(300);
-          }
-        } catch (innerErr: any) {
-          if (process.env.LOG_STORY_DEBUG) {
-            console.error(`[log-story] AI narrative failed for "${unit.title}":`, innerErr?.message ?? innerErr);
+            estimatedCost += provider.estimateCost(500);
+
+            if (unit.outcome === 'failure' || unit.outcome === 'partial') {
+              const rootCause = await provider.generateRootCause(combinedEvent, redactionConfig);
+              if (rootCause) unit.rootCause = rootCause;
+              aiCallsMade++;
+              estimatedCost += provider.estimateCost(300);
+            }
+          })
+        );
+
+        for (const result of results) {
+          if (result.status === 'rejected' && process.env.LOG_STORY_DEBUG) {
+            console.error(`[log-story] AI narrative failed:`, result.reason?.message ?? result.reason);
           }
         }
       }
@@ -108,9 +166,12 @@ export class LogStory {
   }
 
   async analyze(input: string): Promise<AnalysisResult> {
+    this.validateInputSize(input);
     const startTime = Date.now();
 
-    const { entries } = parse(input);
+    const { entries: rawEntries } = parse(input);
+    const filtered = applyFilter(rawEntries, this.config.filter);
+    const entries = this.applyRedaction(filtered);
     const { groups } = groupEntries(entries, this.config.grouping);
     const events = extractEvents(groups);
     const storyUnits = buildStoryUnits(events);
@@ -122,7 +183,9 @@ export class LogStory {
   async analyzeJSON(logs: Record<string, unknown>[]): Promise<AnalysisResult> {
     const startTime = Date.now();
 
-    const { entries } = parseJSON(logs);
+    const { entries: rawEntries } = parseJSON(logs);
+    const filtered = applyFilter(rawEntries, this.config.filter);
+    const entries = this.applyRedaction(filtered);
     const { groups } = groupEntries(entries, this.config.grouping);
     const events = extractEvents(groups);
     const storyUnits = buildStoryUnits(events);
@@ -178,6 +241,7 @@ export type {
   StreamConfig,
   LogStoryStreamEvent,
   RedactionConfig,
+  FilterConfig,
 } from './types/index.js';
 
 export { createAnalysisStream } from './streaming/index.js';
