@@ -127,7 +127,7 @@ function detectServiceIssues(stories: StoryUnit[]): Insight[] {
   }
 
   for (const [service, count] of serviceFailures) {
-    if (count >= 1) {
+    if (count >= 2) {
       insights.push({
         type: 'trend',
         title: `Service degradation: ${service}`,
