@@ -1,4 +1,5 @@
 import { Transform, type TransformCallback } from 'node:stream';
+import { createHash } from 'node:crypto';
 import type {
   LogEntry,
   LogStoryConfig,
@@ -13,6 +14,18 @@ import { groupEntries } from '../grouping/index.js';
 import { extractEvents } from '../extraction/index.js';
 import { buildStoryUnits } from '../causality/index.js';
 import { generateInsights } from '../insights/index.js';
+
+/**
+ * Generate a signature for a story to detect duplicates from overlap processing.
+ */
+function storySignature(story: StoryUnit): string {
+  const entryKeys = story.events
+    .flatMap((e) => e.entries)
+    .map((e) => `${e.timestamp.getTime()}:${e.message.slice(0, 40)}`)
+    .sort()
+    .join('|');
+  return createHash('sha256').update(entryKeys).digest('hex').substring(0, 16);
+}
 
 /**
  * A Transform stream that processes log text and emits LogStoryStreamEvent objects.
@@ -46,6 +59,7 @@ export function createAnalysisStream(config: LogStoryConfig = {}): LogStoryStrea
   let totalStoriesGenerated = 0;
   let totalErrorsDetected = 0;
   let allStories: StoryUnit[] = [];
+  const emittedStorySignatures = new Set<string>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   const startTime = Date.now();
 
@@ -156,11 +170,16 @@ export function createAnalysisStream(config: LogStoryConfig = {}): LogStoryStrea
     const stories = buildStoryUnits(events);
 
     chunksProcessed++;
-    totalStoriesGenerated += stories.length;
-    allStories.push(...stories);
 
-    // Emit each story
+    // Deduplicate stories from overlap entries
     for (const story of stories) {
+      const sig = storySignature(story);
+      if (emittedStorySignatures.has(sig)) continue;
+      emittedStorySignatures.add(sig);
+
+      totalStoriesGenerated++;
+      allStories.push(story);
+
       const event: LogStoryStreamEvent = { type: 'story', story };
       s.push(event);
       s.emit('story', story);
