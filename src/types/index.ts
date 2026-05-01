@@ -117,7 +117,6 @@ export interface AIConfig {
   provider: AIProviderName;
   apiKey?: string;
   model?: string;
-  maxTokensPerSession?: number;
 }
 
 export interface GroupingConfig {
@@ -130,18 +129,30 @@ export interface OutputConfig {
   verbosity?: Verbosity;
 }
 
+export interface RedactionConfig {
+  enabled?: boolean;
+  redactEmails?: boolean;
+  redactIPs?: boolean;
+  redactAPIKeys?: boolean;
+  redactTokens?: boolean;
+  redactCreditCards?: boolean;
+  redactSSN?: boolean;
+  customPatterns?: RegExp[];
+}
+
 export interface LogStoryConfig {
   ai?: AIConfig;
   grouping?: GroupingConfig;
   output?: OutputConfig;
   streaming?: StreamConfig;
+  redaction?: RedactionConfig;
 }
 
 // ─── AI Provider Interface ──────────────────────────────────────
 
 export interface AIProvider {
-  generateNarrative(event: LogEvent): Promise<string>;
-  generateRootCause(event: LogEvent): Promise<string>;
+  generateNarrative(event: LogEvent, redactionConfig?: RedactionConfig): Promise<string>;
+  generateRootCause(event: LogEvent, redactionConfig?: RedactionConfig): Promise<string>;
   answerQuery(query: string, context: StoryUnit[]): Promise<string>;
   estimateCost(tokens: number): number;
 }
