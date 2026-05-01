@@ -75,16 +75,17 @@ export function redactPII(text: string, options: RedactionOptions = {}): string 
 
 /**
  * Check if text contains potential PII.
+ * Uses non-global regex tests to avoid stateful lastIndex issues.
  */
 export function containsPII(text: string): boolean {
   return (
-    EMAIL_PATTERN.test(text) ||
-    IPV4_PATTERN.test(text) ||
-    IPV6_PATTERN.test(text) ||
-    API_KEY_PATTERN.test(text) ||
-    JWT_PATTERN.test(text) ||
-    BEARER_TOKEN_PATTERN.test(text) ||
-    CREDIT_CARD_PATTERN.test(text) ||
-    SSN_PATTERN.test(text)
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/.test(text) ||
+    /\b(?:\d{1,3}\.){3}\d{1,3}\b/.test(text) ||
+    /\b(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\b/i.test(text) ||
+    /\b(?:sk-[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_-]{35})\b/.test(text) ||
+    /\beyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\b/.test(text) ||
+    /\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/i.test(text) ||
+    /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/.test(text) ||
+    /\b\d{3}-\d{2}-\d{4}\b/.test(text)
   );
 }
