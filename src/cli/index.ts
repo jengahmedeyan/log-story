@@ -1,9 +1,32 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { readFileSync, statSync, createReadStream } from 'fs';
+import { readFileSync, statSync, createReadStream, existsSync, watchFile, openSync, readSync, closeSync } from 'fs';
+import { resolve } from 'path';
 import { LogStory } from '../index.js';
-import type { LogStoryConfig, OutputFormat, GroupingConfig, AIProviderName } from '../types/index.js';
+import type { LogStoryConfig, OutputFormat, GroupingConfig, AIProviderName, FilterConfig, LogLevel } from '../types/index.js';
+
+async function createSpinner(text: string) {
+  const { default: ora } = await import('ora');
+  return ora({ text, spinner: 'dots' }).start();
+}
+
+const CONFIG_FILE_NAMES = ['.logstoryrc.json', 'logstory.config.json'];
+
+function loadConfigFile(): Partial<LogStoryConfig> | undefined {
+  for (const name of CONFIG_FILE_NAMES) {
+    const filePath = resolve(process.cwd(), name);
+    if (existsSync(filePath)) {
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        return JSON.parse(content) as Partial<LogStoryConfig>;
+      } catch {
+        // Invalid config file — skip silently
+      }
+    }
+  }
+  return undefined;
+}
 
 function detectProviderFromApiKey(apiKey: string | undefined, defaultProvider: AIProviderName = 'openai'): AIProviderName {
   if (!apiKey) return 'local';
@@ -30,24 +53,33 @@ program
   .argument('[file]', 'Log file to analyze (or pipe via stdin)')
   .option('-f, --format <format>', 'Output format: cli, json, timeline', 'cli')
   .option('--ai-provider <provider>', 'AI provider: openai, anthropic, gemini', 'openai')
-  .option('--api-key <key>', 'API key (or set LOG_STORY_API_KEY)')
   .option('--no-ai', 'Run without AI (template-based only)')
   .option('--group-by <strategy>', 'Grouping: auto, request, time', 'auto')
+  .option('--level <levels>', 'Filter by log level (comma-separated: info,warn,error)')
+  .option('--after <datetime>', 'Include only entries after this time (ISO 8601)')
+  .option('--before <datetime>', 'Include only entries before this time (ISO 8601)')
+  .option('--user <id>', 'Filter to entries for a specific user ID')
+  .option('--request-id <id>', 'Filter to entries for a specific request/trace ID')
   .option('-v, --verbose', 'Show detailed output')
   .action(async (file: string | undefined, options: any) => {
-    const apiKey = options.apiKey ?? process.env.LOG_STORY_API_KEY;
+    const fileConfig = loadConfigFile();
+    const apiKey = process.env.LOG_STORY_API_KEY;
     const provider = detectProviderFromApiKey(apiKey, options.aiProvider);
 
     const config: LogStoryConfig = {
+      ...fileConfig,
       ai: options.ai === false ? undefined : {
+        ...fileConfig?.ai,
         provider,
         apiKey,
       },
-      grouping: buildGroupingConfig(options.groupBy),
+      grouping: buildGroupingConfig(options.groupBy) ?? fileConfig?.grouping,
       output: {
+        ...fileConfig?.output,
         format: options.format as OutputFormat,
         verbosity: options.verbose ? 'detailed' : 'normal',
       },
+      filter: buildFilterConfig(options) ?? fileConfig?.filter,
     };
 
     let input: string;
@@ -57,6 +89,7 @@ program
 
       if (fileSize > MAX_SYNC_SIZE) {
         // Stream large files to avoid OOM (Out of Memory)
+        const spinner = await createSpinner('Streaming large log file...');
         const logStory = new LogStory(config);
         const stream = logStory.createStream();
         const stories: any[] = [];
@@ -71,6 +104,8 @@ program
           stream.on('error', reject);
           createReadStream(file).pipe(stream);
         });
+
+        spinner.succeed(`Streaming complete — ${stories.length} stories found`);
 
         const output = logStory.format({
           storyUnits: stories,
@@ -93,8 +128,10 @@ program
       process.exit(1);
     }
 
+    const spinner = await createSpinner('Analyzing logs...');
     const logStory = new LogStory(config);
     const result = await logStory.analyze(input);
+    spinner.succeed(`Analysis complete — ${result.storyUnits.length} stories found`);
     const output = logStory.format(result);
     console.log(output);
   });
@@ -104,10 +141,9 @@ program
   .description('Ask a question about your logs')
   .argument('<question>', 'Natural language question')
   .option('--context <file>', 'Log file for context')
-  .option('--api-key <key>', 'API key (or set LOG_STORY_API_KEY)')
   .option('--ai-provider <provider>', 'AI provider: openai, anthropic, gemini', 'openai')
   .action(async (question: string, options: any) => {
-    const apiKey = options.apiKey ?? process.env.LOG_STORY_API_KEY;
+    const apiKey = process.env.LOG_STORY_API_KEY;
     const provider = detectProviderFromApiKey(apiKey, options.aiProvider);
 
     let input: string;
@@ -168,5 +204,137 @@ function buildGroupingConfig(strategy: string): GroupingConfig | undefined {
       return undefined;
   }
 }
+
+function buildFilterConfig(options: any): FilterConfig | undefined {
+  const filter: FilterConfig = {};
+  let hasFilter = false;
+
+  if (options.level) {
+    filter.levels = options.level.split(',').map((l: string) => l.trim().toLowerCase()) as LogLevel[];
+    hasFilter = true;
+  }
+  if (options.after) {
+    const d = new Date(options.after);
+    if (!isNaN(d.getTime())) { filter.after = d; hasFilter = true; }
+  }
+  if (options.before) {
+    const d = new Date(options.before);
+    if (!isNaN(d.getTime())) { filter.before = d; hasFilter = true; }
+  }
+  if (options.user) {
+    filter.userId = options.user;
+    hasFilter = true;
+  }
+  if (options.requestId) {
+    filter.requestId = options.requestId;
+    hasFilter = true;
+  }
+
+  return hasFilter ? filter : undefined;
+}
+
+program
+  .command('watch')
+  .description('Watch a log file and analyze new entries continuously')
+  .argument('<file>', 'Log file to watch')
+  .option('-f, --format <format>', 'Output format: cli, json, timeline', 'cli')
+  .option('--ai-provider <provider>', 'AI provider: openai, anthropic, gemini', 'openai')
+  .option('--no-ai', 'Run without AI (template-based only)')
+  .option('--group-by <strategy>', 'Grouping: auto, request, time', 'auto')
+  .option('--level <levels>', 'Filter by log level (comma-separated: info,warn,error)')
+  .option('--user <id>', 'Filter to entries for a specific user ID')
+  .option('--interval <ms>', 'Polling interval in milliseconds', '1000')
+  .option('-v, --verbose', 'Show detailed output')
+  .action(async (file: string, options: any) => {
+    if (!existsSync(file)) {
+      console.error(`File not found: ${file}`);
+      process.exit(1);
+    }
+
+    const fileConfig = loadConfigFile();
+    const apiKey = process.env.LOG_STORY_API_KEY;
+    const provider = detectProviderFromApiKey(apiKey, options.aiProvider);
+
+    const config: LogStoryConfig = {
+      ...fileConfig,
+      ai: options.ai === false ? undefined : {
+        ...fileConfig?.ai,
+        provider,
+        apiKey,
+      },
+      grouping: buildGroupingConfig(options.groupBy) ?? fileConfig?.grouping,
+      output: {
+        ...fileConfig?.output,
+        format: options.format as OutputFormat,
+        verbosity: options.verbose ? 'detailed' : 'normal',
+      },
+      filter: buildFilterConfig(options) ?? fileConfig?.filter,
+    };
+
+    const interval = Math.max(500, parseInt(options.interval, 10) || 1000);
+    let lastSize = statSync(file).size;
+    let processing = false;
+
+    const logStory = new LogStory(config);
+
+    console.log(`Watching ${file} (polling every ${interval}ms). Press Ctrl+C to stop.\n`);
+
+    // Initial analysis of existing content
+    const initialContent = readFileSync(file, 'utf-8');
+    if (initialContent.trim()) {
+      const result = await logStory.analyze(initialContent);
+      const output = logStory.format(result);
+      console.log(output);
+    }
+
+    watchFile(file, { interval }, async () => {
+      if (processing) return;
+
+      let currentSize: number;
+      try {
+        currentSize = statSync(file).size;
+      } catch {
+        return; // File may have been deleted
+      }
+
+      if (currentSize <= lastSize) {
+        if (currentSize < lastSize) lastSize = 0; // File was truncated — reset
+        else return; // No new data
+      }
+
+      processing = true;
+      try {
+        // Read only new content from the file
+        const fd = openSync(file, 'r');
+        const buffer = Buffer.alloc(currentSize - lastSize);
+        readSync(fd, buffer, 0, buffer.length, lastSize);
+        closeSync(fd);
+
+        const newContent = buffer.toString('utf-8');
+        lastSize = currentSize;
+
+        if (!newContent.trim()) return;
+
+        const result = await logStory.analyze(newContent);
+        if (result.storyUnits.length > 0) {
+          const output = logStory.format(result);
+          console.log(`\n--- New activity detected (${new Date().toLocaleTimeString()}) ---`);
+          console.log(output);
+        }
+      } catch (err: any) {
+        if (process.env.LOG_STORY_DEBUG) {
+          console.error(`[log-story] Watch error:`, err.message);
+        }
+      } finally {
+        processing = false;
+      }
+    });
+
+    // Keep the process alive
+    process.on('SIGINT', () => {
+      console.log('\nStopping watch...');
+      process.exit(0);
+    });
+  });
 
 program.parse();
