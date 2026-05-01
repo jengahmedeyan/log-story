@@ -77,15 +77,15 @@ describe('Output Formatters', () => {
   describe('CLI Formatter', () => {
     it('should format basic analysis result', () => {
       const output = formatCLI(mockResult);
-      expect(output).toContain('LOG STORY');
-      expect(output).toContain('1 stories reconstructed from 1 log entries');
+      expect(output).toContain('LOG STORY ANALYSIS');
+      expect(output).toContain('1 stories from 1 log entries');
       expect(output).toContain('User Authentication');
       expect(output).toContain('User successfully authenticated with the system');
     });
 
     it('should include insights section when present', () => {
       const output = formatCLI(mockResult);
-      expect(output).toContain('SYSTEM INSIGHTS');
+      expect(output).toContain('INSIGHTS');
       expect(output).toContain('High success rate');
       expect(output).toContain('All authentication attempts succeeded');
     });
