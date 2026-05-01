@@ -6,7 +6,7 @@ import type { AIProvider, LogEvent, StoryUnit } from '../types/index.js';
  */
 export function create(): AIProvider {
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
+    async generateNarrative(event: LogEvent, _redactionConfig): Promise<string> {
       const actions = event.actions;
       const duration = formatDuration(event.duration);
       const entryCount = event.entries.length;
@@ -38,7 +38,7 @@ export function create(): AIProvider {
       return `Processed ${entryCount} log entries over ${duration}: ${messages.join(' → ')}`;
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
+    async generateRootCause(event: LogEvent, _redactionConfig): Promise<string> {
       const errorEntries = event.entries.filter((e) => e.level === 'error' || e.level === 'fatal');
       if (errorEntries.length === 0) return 'No errors detected in the event.';
 
