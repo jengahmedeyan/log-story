@@ -88,26 +88,30 @@ function combineStories(primary: StoryUnit, secondary: StoryUnit): StoryUnit {
   const allActors = [...new Set([...primary.actors, ...secondary.actors])];
   const allServices = [...new Set([...primary.services, ...secondary.services])];
 
-  // Keep the more severe/informative story's narrative
-  const keepPrimary = primary.severity >= secondary.severity;
-  const narrative = keepPrimary
-    ? primary.narrative + (secondary.narrative !== primary.narrative ? ' ' + secondary.narrative : '')
-    : secondary.narrative + ' ' + primary.narrative;
+  // Regenerate narrative from combined events rather than concatenating
+  const combinedOutcome = determineCombinedOutcome(primary, secondary);
+  const combinedSeverity = determineCombinedSeverity(primary.severity, secondary.severity);
+
+  // Rebuild narrative from scratch using combined events
+  const relationType = allEvents.some((e) => e.outcome === 'failure') ? 'temporal_cause' as const : 'same_user_flow' as const;
+  const narrative = generateNarrative(allEvents, combinedOutcome, relationType);
 
   return {
     ...primary,
     events: allEvents,
     actors: allActors,
     services: allServices,
-    narrative: narrative.trim(),
+    narrative,
     rootCause: primary.rootCause ?? secondary.rootCause,
     impact: primary.impact ?? secondary.impact,
     recommendation: primary.recommendation ?? secondary.recommendation,
-    severity: determineCombinedSeverity(primary.severity, secondary.severity),
-    outcome: determineCombinedOutcome(primary, secondary),
+    severity: combinedSeverity,
+    outcome: combinedOutcome,
     startTime: new Date(Math.min(primary.startTime.getTime(), secondary.startTime.getTime())),
     endTime: new Date(Math.max(primary.endTime.getTime(), secondary.endTime.getTime())),
     causalChain: [...primary.causalChain, ...secondary.causalChain],
+    // Regenerate title from combined data
+    title: generateTitle(allEvents, combinedOutcome),
   };
 }
 
@@ -376,10 +380,17 @@ function buildStoryFromChain(chain: EventChain): StoryUnit {
 
 function determineChainOutcome(events: LogEvent[]): EventOutcome {
   const hasFailure = events.some((e) => e.outcome === 'failure');
+  const hasSuccess = events.some((e) => e.outcome === 'success');
   const lastEvent = events[events.length - 1];
 
+  // Last event determines the "final" outcome
+  if (lastEvent.outcome === 'failure') return 'failure';
+
+  // If there were failures but the story recovered (last event succeeded), it's partial
+  if (hasFailure && hasSuccess && lastEvent.outcome === 'success') return 'partial';
+
+  // If there's a failure and no final success, it's a failure
   if (hasFailure && lastEvent.outcome !== 'success') return 'failure';
-  if (hasFailure && lastEvent.outcome === 'success') return 'partial';
 
   // Check all events for success signals
   const allSuccess = events.every((e) => e.outcome === 'success');
@@ -388,7 +399,7 @@ function determineChainOutcome(events: LogEvent[]): EventOutcome {
   // If last event succeeded, call it success
   if (lastEvent.outcome === 'success') return 'success';
 
-  return 'success';
+  return 'unknown';
 }
 
 function determineSeverity(events: LogEvent[], outcome: EventOutcome): StorySeverity {
@@ -407,43 +418,77 @@ function determineSeverity(events: LogEvent[], outcome: EventOutcome): StorySeve
 function generateTitle(events: LogEvent[], outcome: EventOutcome): string {
   const allMessages = events.flatMap((e) => e.entries.map((en) => en.message.toLowerCase()));
   const allActions = events.flatMap((e) => e.actions);
+  const failureDetail = detectFailureDetail(allMessages);
 
   // Detect primary activity
   if (allMessages.some((m) => /checkout|order|payment/.test(m))) {
-    if (outcome === 'failure') return 'Checkout failure (critical incident)';
-    return 'Successful checkout';
+    if (outcome === 'failure') return `Failed Checkout${failureDetail}`;
+    if (outcome === 'partial') return `Partial Checkout${failureDetail}`;
+    return 'Successful Checkout';
   }
   if (allMessages.some((m) => /login|auth|signup|sign.?up/.test(m))) {
     if (allMessages.some((m) => /signup|sign.?up|register/.test(m))) {
-      return outcome === 'failure' ? 'Failed signup attempt' : 'Successful signup';
+      if (outcome === 'failure') return `Failed Signup${failureDetail}`;
+      return 'Successful Signup';
     }
-    if (outcome === 'failure') return 'Authentication failure';
-    return 'Successful login flow';
+    if (outcome === 'failure') return `Authentication Failure${failureDetail}`;
+    if (outcome === 'partial') return `Login with Issues${failureDetail}`;
+    // Check if the story includes more than just login
+    if (allMessages.some((m) => /product|catalog|browse/.test(m))) {
+      return 'Successful Login & Product Browse';
+    }
+    return 'Successful Login Flow';
   }
   if (allMessages.some((m) => /product|catalog|inventory/.test(m))) {
-    return 'Product data retrieval';
+    if (outcome === 'failure') return `Product Data Fetch Failed${failureDetail}`;
+    return 'Product Data Retrieval';
   }
   if (allMessages.some((m) => /dashboard/.test(m))) {
-    return 'Dashboard loaded';
+    if (outcome === 'failure') return `Dashboard Load Failed${failureDetail}`;
+    return 'Dashboard Loaded';
   }
   if (allMessages.some((m) => /support|ticket/.test(m))) {
-    return 'Support ticket created';
+    return 'Support Ticket Created';
   }
   if (allMessages.some((m) => /server.?start|started/.test(m))) {
-    return 'Server initialization';
+    return 'Server Initialization';
   }
   if (allMessages.some((m) => /connection.?pool|memory/.test(m))) {
-    if (outcome === 'failure') return 'Infrastructure issue';
-    return 'Infrastructure event';
+    if (outcome === 'failure') return `Infrastructure Issue${failureDetail}`;
+    return 'Infrastructure Event';
   }
 
   // Fallback: use first endpoint or action type
   const endpoint = allActions.find((a) => a.target)?.target;
   if (endpoint) {
-    return outcome === 'failure' ? `Failed request to ${endpoint}` : `Request to ${endpoint}`;
+    if (outcome === 'failure') return `Failed Request to ${endpoint}`;
+    return `Request to ${endpoint}`;
   }
 
-  return outcome === 'failure' ? 'Operation failed' : 'Operation completed';
+  if (outcome === 'failure') return `Operation Failed${failureDetail}`;
+  if (outcome === 'partial') return `Operation Partially Failed${failureDetail}`;
+  return 'Operation Completed';
+}
+
+/**
+ * Detect the specific cause of failure from log messages to add to the title.
+ */
+function detectFailureDetail(messages: string[]): string {
+  const joined = messages.join(' ');
+  if (/timeout/i.test(joined)) {
+    const provider = extractPattern(messages, /provider[=:\s]+(\w+)/i);
+    if (provider) return ` – ${capitalize(provider)} Timeout`;
+    return ' – Timeout';
+  }
+  if (/connection.?pool.?exhaust/i.test(joined)) return ' – Connection Pool Exhausted';
+  if (/rate.?limit/i.test(joined)) return ' – Rate Limited';
+  if (/unauthorized|403|401/i.test(joined)) return ' – Unauthorized';
+  if (/not.?found|404/i.test(joined)) return ' – Not Found';
+  return '';
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
 function generateNarrative(
@@ -504,32 +549,40 @@ function buildCheckoutNarrative(
 ): string {
   const parts: string[] = [];
 
-  parts.push(`${actor} attempted to complete a checkout.`);
-
-  // Detect payment details
   const paymentProvider = extractPattern(messages, /provider[=:\s]+(\w+)/i) ?? 'the payment service';
   const amount = extractPattern(messages, /(?:amount|total)[=:\s]+([\d.]+)/i);
-
-  if (amount) {
-    parts.push(`The cart total was $${amount}.`);
-  }
+  const orderId = extractPattern(messages, /order[_\s]?id[=:\s]+(\w+)/i);
+  const amountStr = amount ? ` ($${amount})` : '';
 
   if (outcome === 'failure') {
     if (retryCount > 0) {
       parts.push(
-        `The system attempted payment ${retryCount + 1} times via ${paymentProvider}, but all attempts failed due to timeouts.`
+        `${actor} attempted to checkout${amountStr}. Payment failed ${retryCount + 1} times via ${paymentProvider} due to timeouts.`
       );
     } else {
-      parts.push(`Payment via ${paymentProvider} failed.`);
+      parts.push(`${actor} attempted to checkout${amountStr}, but payment via ${paymentProvider} failed.`);
     }
 
-    // Check for escalation (support ticket)
     if (messages.some((m) => /ticket|support/.test(m.toLowerCase()))) {
-      parts.push(`This triggered a support ticket creation.`);
+      parts.push(`A support ticket was created as a result.`);
+    }
+  } else if (outcome === 'partial') {
+    // Mixed: some failures then eventual success, or success then failure
+    const failedAttempts = actions.filter((a) => a.status === 'failed' || a.status === 'retried').length;
+    if (failedAttempts > 0 && orderId) {
+      parts.push(
+        `${actor} checked out${amountStr} after ${failedAttempts} failed payment attempt${failedAttempts > 1 ? 's' : ''} via ${paymentProvider}. Order ${orderId} was eventually created.`
+      );
+    } else if (failedAttempts > 0) {
+      parts.push(
+        `${actor} attempted to checkout${amountStr}. Payment failed ${failedAttempts} time${failedAttempts > 1 ? 's' : ''} via ${paymentProvider} before succeeding.`
+      );
+    } else {
+      parts.push(`${actor} completed a checkout${amountStr} with partial issues.`);
     }
   } else {
-    parts.push(`Payment was processed successfully via ${paymentProvider}.`);
-    const orderId = extractPattern(messages, /order[_\s]?id[=:\s]+(\w+)/i);
+    // Full success
+    parts.push(`${actor} completed checkout${amountStr} successfully via ${paymentProvider}.`);
     if (orderId) {
       parts.push(`Order ${orderId} was created.`);
     }
