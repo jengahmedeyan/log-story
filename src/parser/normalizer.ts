@@ -34,14 +34,19 @@ export function normalizeLevel(raw: string | number | undefined): LogLevel {
   return LEVEL_MAP[key] ?? 'info';
 }
 
-export function normalizeTimestamp(raw: unknown): Date {
-  if (raw instanceof Date) return raw;
-  if (typeof raw === 'number') return new Date(raw);
+export interface TimestampResult {
+  date: Date;
+  inferred: boolean;
+}
+
+export function normalizeTimestamp(raw: unknown): TimestampResult {
+  if (raw instanceof Date) return { date: raw, inferred: false };
+  if (typeof raw === 'number') return { date: new Date(raw), inferred: false };
   if (typeof raw === 'string') {
     const parsed = new Date(raw);
-    if (!isNaN(parsed.getTime())) return parsed;
+    if (!isNaN(parsed.getTime())) return { date: parsed, inferred: false };
   }
-  return new Date();
+  return { date: new Date(), inferred: true };
 }
 
 export function normalizeEntry(partial: Partial<LogEntry> & { raw: string }): LogEntry {
@@ -55,6 +60,7 @@ export function normalizeEntry(partial: Partial<LogEntry> & { raw: string }): Lo
     userId: partial.userId,
     sessionId: partial.sessionId,
     traceId: partial.traceId,
+    timestampInferred: partial.timestampInferred,
     raw: partial.raw,
   };
 }
