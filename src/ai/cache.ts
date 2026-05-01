@@ -60,27 +60,32 @@ function eventSignature(event: LogEvent): string {
   return createHash('sha256').update(JSON.stringify(sig)).digest('hex').substring(0, 16);
 }
 
+/**
+ * Shared module-level caches for AI responses.
+ * These persist across LogStory instances for better performance.
+ * Use clearCache() to reset between test runs.
+ */
 const narrativeCache = new ResponseCache();
 const rootCauseCache = new ResponseCache();
 
 export function withCache(provider: AIProvider): AIProvider {
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
+    async generateNarrative(event: LogEvent, redactionConfig): Promise<string> {
       const key = `narrative:${eventSignature(event)}`;
       const cached = narrativeCache.get(key);
       if (cached) return cached;
 
-      const result = await provider.generateNarrative(event);
+      const result = await provider.generateNarrative(event, redactionConfig);
       narrativeCache.set(key, result);
       return result;
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
+    async generateRootCause(event: LogEvent, redactionConfig): Promise<string> {
       const key = `rootcause:${eventSignature(event)}`;
       const cached = rootCauseCache.get(key);
       if (cached) return cached;
 
-      const result = await provider.generateRootCause(event);
+      const result = await provider.generateRootCause(event, redactionConfig);
       rootCauseCache.set(key, result);
       return result;
     },
