@@ -32,6 +32,8 @@ export class LogStory {
 
     try {
       const provider = await getProvider(providerName, this.config.ai.apiKey, this.config.ai.model);
+      const redactionConfig = this.config.redaction;
+
       for (const unit of storyUnits) {
         const primaryEvent = unit.events[0];
         if (!primaryEvent) continue;
@@ -47,12 +49,12 @@ export class LogStory {
         };
 
         try {
-          unit.narrative = await provider.generateNarrative(combinedEvent);
+          unit.narrative = await provider.generateNarrative(combinedEvent, redactionConfig);
           aiCallsMade++;
           estimatedCost += provider.estimateCost(500);
 
           if (unit.outcome === 'failure' || unit.outcome === 'partial') {
-            const rootCause = await provider.generateRootCause(combinedEvent);
+            const rootCause = await provider.generateRootCause(combinedEvent, redactionConfig);
             if (rootCause) unit.rootCause = rootCause;
             aiCallsMade++;
             estimatedCost += provider.estimateCost(300);
@@ -175,7 +177,10 @@ export type {
   OutputFormat,
   StreamConfig,
   LogStoryStreamEvent,
+  RedactionConfig,
 } from './types/index.js';
 
 export { createAnalysisStream } from './streaming/index.js';
 export type { LogStoryStream } from './streaming/index.js';
+export { clearCache } from './ai/cache.js';
+export { redactPII, containsPII } from './parser/redaction.js';
