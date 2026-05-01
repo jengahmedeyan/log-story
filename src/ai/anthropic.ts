@@ -1,6 +1,8 @@
 import type { AIProvider, LogEvent, StoryUnit } from '../types/index.js';
 import { narrativePrompt, rootCausePrompt } from '../narrative/prompt-templates.js';
 
+// Default model - Update periodically as newer models become available
+// Last updated: May 2026 (claude-sonnet-4-20250514 is current flagship)
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
 
 export function create(apiKey: string, model?: string): AIProvider {
@@ -17,8 +19,8 @@ export function create(apiKey: string, model?: string): AIProvider {
   const modelName = model ?? DEFAULT_MODEL;
 
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
-      const prompt = narrativePrompt(event);
+    async generateNarrative(event: LogEvent, redactionConfig): Promise<string> {
+      const prompt = narrativePrompt(event, redactionConfig);
       const response = await client.messages.create({
         model: modelName,
         max_tokens: 200,
@@ -28,8 +30,8 @@ export function create(apiKey: string, model?: string): AIProvider {
       return block?.type === 'text' ? block.text.trim() : '';
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
-      const prompt = rootCausePrompt(event);
+    async generateRootCause(event: LogEvent, redactionConfig): Promise<string> {
+      const prompt = rootCausePrompt(event, redactionConfig);
       const response = await client.messages.create({
         model: modelName,
         max_tokens: 100,
