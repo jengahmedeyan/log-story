@@ -12,6 +12,7 @@ export interface LogEntry {
   userId?: string;
   sessionId?: string;
   traceId?: string;
+  timestampInferred?: boolean;
   raw: string;
 }
 
@@ -140,12 +141,22 @@ export interface RedactionConfig {
   customPatterns?: RegExp[];
 }
 
+export interface FilterConfig {
+  levels?: LogLevel[];
+  after?: Date;
+  before?: Date;
+  userId?: string;
+  requestId?: string;
+}
+
 export interface LogStoryConfig {
   ai?: AIConfig;
   grouping?: GroupingConfig;
   output?: OutputConfig;
   streaming?: StreamConfig;
   redaction?: RedactionConfig;
+  filter?: FilterConfig;
+  maxInputSize?: number;
 }
 
 // ─── AI Provider Interface ──────────────────────────────────────
@@ -201,4 +212,5 @@ export interface ParseResult {
   entries: LogEntry[];
   detectedFormat: LogFormat;
   parseErrors: number;
+  inferredTimestamps: number;
 }
