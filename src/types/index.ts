@@ -109,7 +109,7 @@ export interface AnalysisStats {
 
 // ─── Configuration ──────────────────────────────────────────────
 
-export type AIProviderName = 'openai' | 'anthropic' | 'local';
+export type AIProviderName = 'openai' | 'anthropic' | 'gemini' | 'local';
 export type OutputFormat = 'cli' | 'json' | 'timeline';
 export type Verbosity = 'minimal' | 'normal' | 'detailed';
 
