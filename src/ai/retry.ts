@@ -68,12 +68,12 @@ export function withRetryBackoff(provider: AIProvider, config?: RetryConfig): AI
   const retryConfig = { ...DEFAULT_RETRY, ...config };
 
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
-      return withRetry(() => provider.generateNarrative(event), retryConfig);
+    async generateNarrative(event: LogEvent, redactionConfig): Promise<string> {
+      return withRetry(() => provider.generateNarrative(event, redactionConfig), retryConfig);
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
-      return withRetry(() => provider.generateRootCause(event), retryConfig);
+    async generateRootCause(event: LogEvent, redactionConfig): Promise<string> {
+      return withRetry(() => provider.generateRootCause(event, redactionConfig), retryConfig);
     },
 
     async answerQuery(query: string, context: StoryUnit[]): Promise<string> {
