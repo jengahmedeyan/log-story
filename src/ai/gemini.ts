@@ -1,6 +1,8 @@
 import type { AIProvider, LogEvent, StoryUnit } from '../types/index.js';
 import { narrativePrompt, rootCausePrompt } from '../narrative/prompt-templates.js';
 
+// Default model - Update periodically as newer models become available
+// Last updated: May 2026 (gemini-2.5-flash offers best speed/quality balance)
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 export function create(apiKey: string, model?: string): AIProvider {
@@ -27,12 +29,12 @@ export function create(apiKey: string, model?: string): AIProvider {
   }
 
   return {
-    async generateNarrative(event: LogEvent): Promise<string> {
-      return generateContent(narrativePrompt(event), 400);
+    async generateNarrative(event: LogEvent, redactionConfig): Promise<string> {
+      return generateContent(narrativePrompt(event, redactionConfig), 400);
     },
 
-    async generateRootCause(event: LogEvent): Promise<string> {
-      return generateContent(rootCausePrompt(event), 200);
+    async generateRootCause(event: LogEvent, redactionConfig): Promise<string> {
+      return generateContent(rootCausePrompt(event, redactionConfig), 200);
     },
 
     async answerQuery(query: string, context: StoryUnit[]): Promise<string> {
