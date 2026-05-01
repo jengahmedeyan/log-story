@@ -74,3 +74,4 @@ export function parseJSON(logs: Record<string, unknown>[]): ParseResult {
 }
 
 export { detectFormat } from './formats.js';
+export { redactPII, containsPII, type RedactionOptions } from './redaction.js';
