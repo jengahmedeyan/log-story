@@ -1,19 +1,21 @@
+import chalk from 'chalk';
+
 export const OUTCOME_SYMBOLS: Record<string, string> = {
-  success: '[✓]',
-  failure: '[✗]',
-  partial: '[!]',
-  unknown: '[?]',
+  success: chalk.green('[✓]'),
+  failure: chalk.red('[✗]'),
+  partial: chalk.yellow('[!]'),
+  unknown: chalk.gray('[?]'),
 };
 
 export const SEVERITY_SYMBOLS: Record<string, string> = {
-  info: '[i]',
-  warning: '[!]',
-  critical: '[✗]',
+  info: chalk.blue('[i]'),
+  warning: chalk.yellow('[!]'),
+  critical: chalk.red('[✗]'),
 };
 
 export const INSIGHT_SYMBOLS: Record<string, string> = {
-  low: '[ ]',
-  medium: '[!]',
-  high: '[!!]',
-  critical: '[✗]',
+  low: chalk.gray('[ ]'),
+  medium: chalk.yellow('[!]'),
+  high: chalk.red('[!!]'),
+  critical: chalk.redBright('[✗]'),
 };
