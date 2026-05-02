@@ -61,15 +61,15 @@ describe('Parser', () => {
       expect(result.detectedFormat).toBe('unknown');
     });
 
-    it('handles unstructured plain text', () => {
+    it('rejects unstructured plain text without timestamps', () => {
       const input = `POST /checkout
 calling payment API
 retry payment API
 timeout after 5000ms`;
 
       const result = parse(input);
-      expect(result.entries).toHaveLength(4);
-      expect(result.entries[3].level).toBe('error'); // "timeout" infers error level
+      expect(result.entries).toHaveLength(0);
+      expect(result.unparsedLines).toBe(4);
     });
   });
 });
