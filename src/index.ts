@@ -7,7 +7,7 @@ import type {
   StoryUnit,
   FilterConfig,
 } from './types/index.js';
-import { parse, parseJSON } from './parser/index.js';
+import { parse, parseJSON, checkFormatConfidence } from './parser/index.js';
 import { redactPII } from './parser/redaction.js';
 import { groupEntries } from './grouping/index.js';
 import { extractEvents } from './extraction/index.js';
@@ -143,6 +143,7 @@ export class LogStory {
     aiCallsMade: number,
     estimatedCost: number,
     startTime: number,
+    unparsedLines: number = 0,
   ): AnalysisResult {
     const insights = generateInsights(storyUnits);
     const systemSummary = generateSystemSummary(storyUnits, insights);
@@ -161,6 +162,7 @@ export class LogStory {
         aiCallsMade,
         estimatedCost,
         processingTimeMs: Date.now() - startTime,
+        unparsedLines,
       },
     };
   }
@@ -169,7 +171,41 @@ export class LogStory {
     this.validateInputSize(input);
     const startTime = Date.now();
 
-    const { entries: rawEntries } = parse(input);
+    // Format confidence gate: sample 20 lines, reject if <70% match a supported format
+    const lines = input.split('\n').filter((l) => l.trim().length > 0);
+    if (lines.length >= 5) {
+      const { confidence, matchedFormat, unmatchedSample } = checkFormatConfidence(lines);
+      if (confidence < 0.7) {
+        const error = new Error(
+          `This log doesn't appear to be from a Node.js application.\n` +
+          `  log-story supports: pino, winston, bunyan, morgan\n` +
+          `  Confidence: ${Math.round(confidence * 100)}% of sampled lines matched a supported format.\n` +
+          `  Run with --debug-parse to inspect unmatched lines.`
+        );
+        (error as any).code = 'UNRECOGNISED_FORMAT';
+        (error as any).confidence = confidence;
+        (error as any).unmatchedSample = unmatchedSample;
+        throw error;
+      }
+    }
+
+    const parseResult = parse(input);
+    const { entries: rawEntries, unparsedLines, parseErrors } = parseResult;
+
+    // Guard: if the vast majority of lines are unparsed, refuse to generate phantom stories
+    const totalLines = rawEntries.length + parseErrors;
+    if (totalLines >= 10 && unparsedLines / totalLines >= 0.9) {
+      const error = new Error(
+        `Log format not recognised: ${unparsedLines} of ${totalLines} lines could not be parsed.\n` +
+        `  log-story supports: pino, winston, bunyan, morgan\n` +
+        `  Run with --debug-parse to see which lines failed and why.`
+      );
+      (error as any).code = 'UNRECOGNISED_FORMAT';
+      (error as any).unparsedLines = unparsedLines;
+      (error as any).totalLines = totalLines;
+      throw error;
+    }
+
     const filtered = applyFilter(rawEntries, this.config.filter);
     const entries = this.applyRedaction(filtered);
     const { groups } = groupEntries(entries, this.config.grouping);
@@ -177,7 +213,7 @@ export class LogStory {
     const storyUnits = buildStoryUnits(events);
     const { aiCallsMade, estimatedCost } = await this.enhanceWithAI(storyUnits);
 
-    return this.buildResult(entries, groups, events, storyUnits, aiCallsMade, estimatedCost, startTime);
+    return this.buildResult(entries, groups, events, storyUnits, aiCallsMade, estimatedCost, startTime, unparsedLines);
   }
 
   async analyzeJSON(logs: Record<string, unknown>[]): Promise<AnalysisResult> {
