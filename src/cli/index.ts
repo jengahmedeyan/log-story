@@ -60,8 +60,13 @@ program
   .option('--before <datetime>', 'Include only entries before this time (ISO 8601)')
   .option('--user <id>', 'Filter to entries for a specific user ID')
   .option('--request-id <id>', 'Filter to entries for a specific request/trace ID')
+  .option('--debug-parse', 'Write unparsed lines to stderr with failure reason')
   .option('-v, --verbose', 'Show detailed output')
   .action(async (file: string | undefined, options: any) => {
+    // Set debug parse env var if flag is present
+    if (options.debugParse) {
+      process.env.LOG_STORY_DEBUG_PARSE = '1';
+    }
     const fileConfig = loadConfigFile();
     const apiKey = process.env.LOG_STORY_API_KEY;
     const provider = detectProviderFromApiKey(apiKey, options.aiProvider);
@@ -130,10 +135,25 @@ program
 
     const spinner = await createSpinner('Analyzing logs...');
     const logStory = new LogStory(config);
-    const result = await logStory.analyze(input);
-    spinner.succeed(`Analysis complete — ${result.storyUnits.length} stories found`);
-    const output = logStory.format(result);
-    console.log(output);
+    try {
+      const result = await logStory.analyze(input);
+      spinner.succeed(`Analysis complete — ${result.storyUnits.length} stories found`);
+      const output = logStory.format(result);
+      console.log(output);
+    } catch (err: any) {
+      if (err.code === 'UNRECOGNISED_FORMAT') {
+        spinner.fail('Log format not recognised');
+        console.error(`\n${err.message}`);
+        if (options.debugParse && err.unmatchedSample?.length) {
+          console.error(`\nUnmatched lines:`);
+          for (const line of err.unmatchedSample) {
+            console.error(`  ${line}`);
+          }
+        }
+        process.exit(1);
+      }
+      throw err;
+    }
   });
 
 program
