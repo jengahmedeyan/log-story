@@ -1,4 +1,4 @@
-import type { LogEntry, LogLevel } from '../types/index.js';
+import type { LogEntry, LogLevel, LogFormat } from '../types/index.js';
 
 const LEVEL_MAP: Record<string, LogLevel> = {
   // Standard levels
@@ -60,7 +60,9 @@ export function normalizeEntry(partial: Partial<LogEntry> & { raw: string }): Lo
     userId: partial.userId,
     sessionId: partial.sessionId,
     traceId: partial.traceId,
+    jobId: partial.jobId,
     timestampInferred: partial.timestampInferred,
+    format: partial.format,
     raw: partial.raw,
   };
 }
