@@ -107,18 +107,39 @@ function determineOutcome(entries: LogEntry[], actions: Action[]): EventOutcome 
   const hasFailedAction = actions.some((a) => a.status === 'failed');
   const hasSuccess = actions.some((a) => a.status === 'completed');
 
-  if (hasError || hasFailedAction) {
-    return hasSuccess ? 'partial' : 'failure';
+  // Check metadata.status fields (from key=value lines)
+  const SUCCESS_STATUSES = new Set(['ok', 'success', 'done', 'complete', 'completed']);
+  const FAILURE_STATUSES = new Set(['error', 'fail', 'failed', 'timeout', 'aborted']);
+  const WARN_STATUSES = new Set(['warn', 'warning']);
+
+  let hasMetadataSuccess = false;
+  let hasMetadataFailure = false;
+  let hasMetadataWarn = false;
+
+  for (const e of entries) {
+    const status = typeof e.metadata?.status === 'string' ? e.metadata.status.toLowerCase() : '';
+    if (SUCCESS_STATUSES.has(status)) hasMetadataSuccess = true;
+    if (FAILURE_STATUSES.has(status)) hasMetadataFailure = true;
+    if (WARN_STATUSES.has(status)) hasMetadataWarn = true;
   }
-  if (hasSuccess) return 'success';
+
+  if (hasError || hasFailedAction || hasMetadataFailure) {
+    return (hasSuccess || hasMetadataSuccess) ? 'partial' : 'failure';
+  }
+  if (hasMetadataWarn) return 'partial';
+  if (hasSuccess || hasMetadataSuccess) return 'success';
 
   // Infer success from message content
   const allMessages = entries.map((e) => e.message.toLowerCase()).join(' ');
   const successSignals = /\b(success|ok|completed|created|loaded|sent|started|healthy|recovered|resolved|done|active|ready|fetched|returned|confirmed|processed)\b/;
   const failureSignals = /\b(fail|error|timeout|refused|rejected|denied|crash|panic|fatal|exhausted)\b/;
 
-  if (failureSignals.test(allMessages)) return 'failure';
+  // Check if failure signals are actually zero-count contexts (e.g., "errors=0", "failures: 0")
+  const hasRealFailureSignal = failureSignals.test(allMessages) && !isZeroCountFailureSignal(allMessages);
+
+  if (hasRealFailureSignal && !successSignals.test(allMessages)) return 'failure';
   if (successSignals.test(allMessages)) return 'success';
+  if (hasRealFailureSignal) return 'failure';
 
   if (entries.length > 1 && !hasError) return 'success';
 
@@ -138,6 +159,36 @@ function extractDependencies(actions: Action[]): string[] {
   return [...deps];
 }
 
+/**
+ * Check if failure-signal words only appear in zero-count contexts (e.g., "errors=0", "failures: 0").
+ * Returns true if ALL failure signals in the message are in zero-count form.
+ */
+function isZeroCountFailureSignal(message: string): boolean {
+  // Match patterns like "errors=0", "error(s)=0", "failures: 0", "fail_count=0"
+  const zeroCountPattern = /\b(?:fail\w*|error\w*|timeout\w*|fatal\w*|crash\w*|panic\w*)\s*[=:]\s*0\b/g;
+  const failureSignals = /\b(fail|error|timeout|refused|rejected|denied|crash|panic|fatal|exhausted)\b/g;
+
+  // Get all failure signal matches
+  const allMatches = [...message.matchAll(failureSignals)];
+  if (allMatches.length === 0) return false;
+
+  // Get all zero-count matches
+  const zeroMatches = [...message.matchAll(zeroCountPattern)];
+  if (zeroMatches.length === 0) return false;
+
+  // Check that every failure signal occurrence is within a zero-count context
+  for (const match of allMatches) {
+    const pos = match.index!;
+    const isZeroCount = zeroMatches.some((zm) => {
+      const zmStart = zm.index!;
+      const zmEnd = zmStart + zm[0].length;
+      return pos >= zmStart && pos < zmEnd;
+    });
+    if (!isZeroCount) return false;
+  }
+  return true;
+}
+
 
 export function buildEvent(groupKey: string, entries: LogEntry[]): LogEvent {
   const sorted = [...entries].sort(
@@ -153,7 +204,7 @@ export function buildEvent(groupKey: string, entries: LogEntry[]): LogEvent {
   const endTime = sorted[sorted.length - 1].timestamp;
 
   let groupType: GroupType = 'inferred';
-  if (groupKey.startsWith('traceId:') || groupKey.startsWith('requestId:')) {
+  if (groupKey.startsWith('traceId:') || groupKey.startsWith('requestId:') || groupKey.startsWith('jobId:')) {
     groupType = 'request';
   } else if (groupKey.startsWith('userId:')) {
     groupType = 'user';
