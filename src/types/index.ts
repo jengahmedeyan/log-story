@@ -12,7 +12,9 @@ export interface LogEntry {
   userId?: string;
   sessionId?: string;
   traceId?: string;
+  jobId?: string;
   timestampInferred?: boolean;
+  format?: LogFormat;
   raw: string;
 }
 
@@ -56,12 +58,15 @@ export interface CausalNode {
 
 export type StorySeverity = 'info' | 'warning' | 'critical';
 
+export type NarrativeSource = 'template' | 'generic' | 'ai';
+
 export interface StoryUnit {
   id: string;
   title: string;
   events: LogEvent[];
   causalChain: CausalNode[];
   narrative: string;
+  narrativeSource: NarrativeSource;
   rootCause?: string;
   impact?: string;
   recommendation?: string;
@@ -74,7 +79,7 @@ export interface StoryUnit {
   services: string[];       // services/endpoints involved
 }
 
-export type InsightType = 'pattern' | 'anomaly' | 'trend';
+export type InsightType = 'pattern' | 'anomaly' | 'trend' | 'correlation';
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 
 export interface Insight {
@@ -106,6 +111,7 @@ export interface AnalysisStats {
   aiCallsMade: number;
   estimatedCost: number;
   processingTimeMs: number;
+  unparsedLines: number;
 }
 
 // ─── Configuration ──────────────────────────────────────────────
@@ -206,11 +212,12 @@ export type LogStoryStreamEvent = StoryStreamEvent | InsightStreamEvent | Progre
 
 // ─── Parser Types ───────────────────────────────────────────────
 
-export type LogFormat = 'winston-json' | 'pino-json' | 'plain' | 'clf' | 'unknown';
+export type LogFormat = 'pino-json' | 'winston-json' | 'bunyan-json' | 'morgan' | 'plain' | 'unknown';
 
 export interface ParseResult {
   entries: LogEntry[];
   detectedFormat: LogFormat;
   parseErrors: number;
   inferredTimestamps: number;
+  unparsedLines: number;
 }
