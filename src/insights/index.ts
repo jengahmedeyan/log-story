@@ -13,6 +13,7 @@ export function generateInsights(stories: StoryUnit[]): Insight[] {
   insights.push(...detectRetryPatterns(stories));
   insights.push(...detectServiceIssues(stories));
   insights.push(...detectUserImpact(stories));
+  insights.push(...detectCrossStoryCorrelations(stories));
 
   return insights;
 }
@@ -63,12 +64,12 @@ function detectFailurePatterns(stories: StoryUnit[]): Insight[] {
   }
 
   for (const [cause, group] of causeGroups) {
-    if (group.length >= 1) {
-      const timeRange = {
-        start: group[0].startTime,
-        end: group[group.length - 1].endTime,
-      };
+    const timeRange = {
+      start: group[0].startTime,
+      end: group[group.length - 1].endTime,
+    };
 
+    if (group.length >= 2) {
       insights.push({
         type: 'pattern',
         title: `Recurring failure: ${cause}`,
@@ -76,7 +77,7 @@ function detectFailurePatterns(stories: StoryUnit[]): Insight[] {
         occurrences: group.length,
         timeRange,
         relatedEvents: group.flatMap((g) => g.events.map((e) => e.id)),
-        severity: group.length >= 3 ? 'critical' : group.length >= 2 ? 'high' : 'medium',
+        severity: group.length >= 3 ? 'critical' : 'high',
       });
     }
   }
@@ -180,4 +181,111 @@ function normalizeCause(cause: string): string {
   if (lower.includes('memory')) return 'Memory pressure';
   if (lower.includes('auth') || lower.includes('denied')) return 'Authentication failure';
   return cause.slice(0, 50);
+}
+
+/**
+ * Detect temporal correlations between stories — the most valuable insight type.
+ * Looks for patterns like: failure A at time T1 correlates with degradation B at T2.
+ */
+function detectCrossStoryCorrelations(stories: StoryUnit[]): Insight[] {
+  const insights: Insight[] = [];
+  const failures = stories.filter((s) => s.outcome === 'failure' || s.outcome === 'partial');
+
+  if (failures.length === 0) return insights;
+
+  // Look for failures that precede scaling events or performance degradation
+  for (const failure of failures) {
+    const failureTime = failure.endTime.getTime();
+    const failureMessages = failure.events.flatMap((e) => e.entries.map((en) => en.message.toLowerCase())).join(' ');
+
+    // Find stories that happen shortly after this failure (within 15 min) that could be effects
+    const potentialEffects = stories.filter((s) => {
+      if (s === failure) return false;
+      const offset = s.startTime.getTime() - failureTime;
+      return offset > 0 && offset <= 900_000; // 15 minutes
+    });
+
+    for (const effect of potentialEffects) {
+      const effectMessages = effect.events.flatMap((e) => e.entries.map((en) => en.message.toLowerCase())).join(' ');
+
+      // Connection pool exhaustion → scaling or performance reports
+      if (/connection.?pool|pool.?exhaust/.test(failureMessages) && /metrics|p\d{2}|latency|scal/.test(effectMessages)) {
+        insights.push({
+          type: 'correlation',
+          title: 'Resource exhaustion preceded performance impact',
+          description: `${failure.title} at ${formatTime(failure.startTime)} correlates with ${effect.title} at ${formatTime(effect.startTime)}. The pool exhaustion likely caused downstream latency increases.`,
+          occurrences: 2,
+          timeRange: { start: failure.startTime, end: effect.endTime },
+          relatedEvents: [...failure.events.map((e) => e.id), ...effect.events.map((e) => e.id)],
+          severity: 'high',
+        });
+        break; // One correlation per failure is enough
+      }
+
+      // Failure → autoscale reaction
+      if (failure.outcome === 'failure' && /scal(?:ing|e)|autoscale|instance/.test(effectMessages)) {
+        insights.push({
+          type: 'correlation',
+          title: 'Failure triggered scaling response',
+          description: `${failure.title} at ${formatTime(failure.startTime)} was followed by ${effect.title} at ${formatTime(effect.startTime)}, suggesting the system auto-remediated.`,
+          occurrences: 2,
+          timeRange: { start: failure.startTime, end: effect.endTime },
+          relatedEvents: [...failure.events.map((e) => e.id), ...effect.events.map((e) => e.id)],
+          severity: 'medium',
+        });
+        break;
+      }
+    }
+  }
+
+  // Detect cascading failure patterns: multiple failures within a short window
+  // Only emit one consolidated insight instead of per-window duplicates
+  const failureWindows = groupByTimeWindow(failures, 300_000); // 5-minute windows
+  const cascadingWindows = failureWindows.filter((w) => w.length >= 2);
+  if (cascadingWindows.length > 0) {
+    const totalFailures = cascadingWindows.reduce((sum, w) => sum + w.length, 0);
+    const firstWindow = cascadingWindows[0];
+    const lastWindow = cascadingWindows[cascadingWindows.length - 1];
+    // Show up to 5 distinct titles to avoid wall-of-text
+    const allTitles = cascadingWindows.flatMap((w) => w.map((s) => s.title));
+    const uniqueTitles = [...new Set(allTitles)].slice(0, 5);
+    const titleSummary = uniqueTitles.join(', ') + (allTitles.length > 5 ? ` (+${allTitles.length - 5} more)` : '');
+
+    insights.push({
+      type: 'correlation',
+      title: 'Cascading failures detected',
+      description: `${totalFailures} failures across ${cascadingWindows.length} burst(s) within 5-minute windows (${titleSummary}). These may share a common upstream cause.`,
+      occurrences: totalFailures,
+      timeRange: { start: firstWindow[0].startTime, end: lastWindow[lastWindow.length - 1].endTime },
+      relatedEvents: cascadingWindows.flatMap((w) => w.flatMap((s) => s.events.map((e) => e.id))),
+      severity: 'high',
+    });
+  }
+
+  return insights;
+}
+
+function formatTime(date: Date): string {
+  return date.toTimeString().slice(0, 8);
+}
+
+function groupByTimeWindow(stories: StoryUnit[], windowMs: number): StoryUnit[][] {
+  if (stories.length === 0) return [];
+
+  const sorted = [...stories].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  const windows: StoryUnit[][] = [];
+  let currentWindow: StoryUnit[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const gap = sorted[i].startTime.getTime() - currentWindow[0].startTime.getTime();
+    if (gap <= windowMs) {
+      currentWindow.push(sorted[i]);
+    } else {
+      windows.push(currentWindow);
+      currentWindow = [sorted[i]];
+    }
+  }
+  windows.push(currentWindow);
+
+  return windows;
 }
