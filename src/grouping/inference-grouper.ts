@@ -60,6 +60,14 @@ function extractKeywords(entry: LogEntry): Set<string> {
     keywords.add(`service:${String(entry.metadata.service).toLowerCase()}`);
   }
 
+  // Component/source as a keyword (important for syslog-style grouping)
+  if (entry.source) {
+    keywords.add(`component:${entry.source.toLowerCase()}`);
+  }
+  if (entry.metadata?.component) {
+    keywords.add(`component:${String(entry.metadata.component).toLowerCase()}`);
+  }
+
   return keywords;
 }
 
@@ -86,6 +94,7 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * 1. Extract keyword vectors from each entry
  * 2. Greedy clustering: assign each entry to the most similar existing cluster
  *    or start a new cluster if similarity is below threshold
+ * 3. Split any resulting cluster with large time gaps into sub-clusters
  *
  * @param entries - Ungrouped log entries
  * @param threshold - Similarity threshold (0-1, default 0.4)
@@ -119,10 +128,31 @@ export function groupByInference(
     }
 
     if (bestClusterIdx >= 0 && bestSimilarity >= threshold) {
-      // Add to existing cluster and update centroid
-      clusters[bestClusterIdx].entries.push(vec.entry);
-      for (const kw of vec.keywords) {
-        clusters[bestClusterIdx].centroid.add(kw);
+      // Check component mismatch: if entry has a distinct component not in cluster, raise threshold
+      const entryComponents = [...vec.keywords].filter(k => k.startsWith('component:'));
+      const clusterComponents = [...clusters[bestClusterIdx].centroid].filter(k => k.startsWith('component:'));
+      if (entryComponents.length > 0 && clusterComponents.length === 0) {
+        // Entry has a component but cluster doesn't — require higher similarity
+        if (bestSimilarity < 0.6) {
+          clusters.push({ centroid: new Set(vec.keywords), entries: [vec.entry] });
+          continue;
+        }
+      }
+      // Check time proximity: don't add to cluster if too far from latest entry
+      const cluster = clusters[bestClusterIdx];
+      const lastEntry = cluster.entries[cluster.entries.length - 1];
+      const timeGap = Math.abs(vec.entry.timestamp.getTime() - lastEntry.timestamp.getTime());
+      if (timeGap <= 300_000) { // 5 minute max gap within a cluster
+        cluster.entries.push(vec.entry);
+        for (const kw of vec.keywords) {
+          cluster.centroid.add(kw);
+        }
+      } else {
+        // Too far in time — start a new cluster even though keywords match
+        clusters.push({
+          centroid: new Set(vec.keywords),
+          entries: [vec.entry],
+        });
       }
     } else {
       // Start a new cluster
