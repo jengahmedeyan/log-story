@@ -120,6 +120,7 @@ export function createAnalysisStream(config: LogStoryConfig = {}): LogStoryStrea
         aiCallsMade: 0,
         estimatedCost: 0,
         processingTimeMs: Date.now() - startTime,
+        unparsedLines: 0,
       };
 
       const doneEvent: LogStoryStreamEvent = { type: 'done', stats };
