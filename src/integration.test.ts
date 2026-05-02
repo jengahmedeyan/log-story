@@ -3,10 +3,10 @@ import { LogStory, analyze } from './index.js';
 
 describe('LogStory Integration', () => {
   it('analyzes simple plain text logs end-to-end', async () => {
-    const input = `POST /checkout
-calling payment API
-retry payment API
-timeout after 5000ms`;
+    const input = `[2024-01-15T10:00:00Z] INFO: POST /checkout
+[2024-01-15T10:00:01Z] INFO: calling payment API
+[2024-01-15T10:00:03Z] WARN: retry payment API
+[2024-01-15T10:00:05Z] ERROR: timeout after 5000ms`;
 
     const result = await analyze(input);
 
@@ -64,7 +64,10 @@ timeout after 5000ms`;
   it('generates insights for failures', async () => {
     const input = `{"level":"info","message":"POST /checkout","timestamp":"2024-01-15T10:00:00Z","requestId":"req-1"}
 {"level":"error","message":"payment timeout provider=stripe","timestamp":"2024-01-15T10:00:05Z","requestId":"req-1"}
-{"level":"error","message":"checkout failed","timestamp":"2024-01-15T10:00:06Z","requestId":"req-1"}`;
+{"level":"error","message":"checkout failed","timestamp":"2024-01-15T10:00:06Z","requestId":"req-1"}
+{"level":"info","message":"POST /checkout","timestamp":"2024-01-15T10:02:00Z","requestId":"req-2"}
+{"level":"error","message":"payment timeout provider=stripe","timestamp":"2024-01-15T10:02:05Z","requestId":"req-2"}
+{"level":"error","message":"checkout failed","timestamp":"2024-01-15T10:02:06Z","requestId":"req-2"}`;
 
     const result = await analyze(input);
     expect(result.insights.length).toBeGreaterThan(0);
