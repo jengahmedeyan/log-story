@@ -52,6 +52,9 @@ export function formatCLI(result: AnalysisResult): string {
   lines.push(`  ${chalk.bold('Summary:')} ${result.systemSummary}`);
   lines.push('');
   lines.push(`  ${chalk.gray('Time:')} ${result.stats.processingTimeMs}ms  ${chalk.gray('│')}  ${chalk.gray('AI:')} $${result.stats.estimatedCost.toFixed(4)} (${result.stats.aiCallsMade} calls)  ${chalk.gray('│')}  ${chalk.gray('Stories:')} ${result.stats.storiesGenerated}`);
+  if ((result.stats as any).unparsedLines > 0) {
+    lines.push(`  ${chalk.gray('│')}  ${chalk.yellow('Unparsed:')} ${result.stats.unparsedLines} lines`);
+  }
   lines.push('');
 
   return lines.join('\n');
@@ -76,6 +79,11 @@ function formatStoryUnit(story: StoryUnit, index: number): string {
   const wrappedNarrative = wrapText(story.narrative, 55);
   for (const line of wrappedNarrative) {
     lines.push(`     ${line}`);
+  }
+
+  // Mark generic narratives with a dim label
+  if (story.narrativeSource === 'generic') {
+    lines.push(`     ${chalk.dim('[heuristic]')}`);
   }
 
   // Root cause, impact, recommendation (for failures/partial)
