@@ -19,7 +19,16 @@ export function groupByTime(
     const curr = sorted[i];
     const gap = curr.timestamp.getTime() - prev.timestamp.getTime();
 
-    if (gap <= windowMs) {
+    // Break group if time gap exceeds window
+    // Also break if component changes AND there's a meaningful gap (> 2s)
+    const prevComponent = getComponent(prev);
+    const currComponent = getComponent(curr);
+    const componentChanged = prevComponent && currComponent && prevComponent !== currComponent;
+    // Also break if log format changes (different subsystems)
+    const formatChanged = prev.format && curr.format && prev.format !== curr.format;
+    const shouldBreak = gap > windowMs || (componentChanged && gap > 2000) || (formatChanged && gap > 0);
+
+    if (!shouldBreak) {
       currentGroup.push(curr);
     } else {
       groups.set(`time:${groupIndex}`, currentGroup);
@@ -34,4 +43,10 @@ export function groupByTime(
   }
 
   return groups;
+}
+
+function getComponent(entry: LogEntry): string | undefined {
+  return entry.source
+    ?? (entry.metadata?.component as string | undefined)
+    ?? (entry.metadata?.service as string | undefined);
 }
